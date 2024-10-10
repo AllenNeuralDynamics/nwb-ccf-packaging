@@ -1,5 +1,6 @@
 """ top level run script """
 
+import argparse
 from pathlib import Path
 from hdmf_zarr.nwb import NWBZarrIO
 import csv
@@ -61,35 +62,47 @@ def get_new_electrode_colums(nwb, ccf_map):
 
 
 def run():
-    probe_csvs = [p for p in (data_folder/'ccf').iterdir() if p.name.endswith('.csv')]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip_ccf", type=str, default='false')
+    parser.add_argument("--input_nwb_dir", type=str, default=f'nwb')
+    parser.add_argument("--input_csv_dir", type=str, default='ccf')
+    args = parser.parse_args()
+    skip_ccf = args.skip_ccf == 'true'
+    input_nwb_dir = data_folder / Path(args.input_nwb_dir)
+    input_csv_dir = data_folder / Path(args.input_csv_dir)
 
-    # find base NWB file
-    nwb_files = [p for p in (data_folder/'nwb').iterdir() if p.name.endswith(".nwb") or p.name.endswith(".nwb.zarr")]
-    assert len(nwb_files) == 1, "Attach one base NWB file data at a time"
+    print('INPUT NWB DIR', input_nwb_dir)
+    nwb_files = [p for p in input_nwb_dir.iterdir() if p.name.endswith(".nwb") or p.name.endswith(".nwb.zarr")]
+    assert len(nwb_files) == 1, f"Attach one base NWB file at a time. {len(nwb_files)} found"
+    input_nwb_path = nwb_files[0]
+    print('INPUT NWB', input_nwb_path)
 
-    source_path = nwb_files[0]
-    destination_dir = '/results/nwb'
-    destination_path = os.path.join(destination_dir, os.path.basename(source_path))
-    print(source_path, destination_path)
-    shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
-    nwbfile_input_path = Path(destination_path)
-
-    if nwbfile_input_path.is_dir():
-        assert (nwbfile_input_path / ".zattrs").is_file(), f"{nwbfile_input_path.name} is not a valid Zarr folder"
+    # determine if file is zarr or hdf5, and copy it to results
+    scratch_nwb_path = scratch_folder / input_nwb_path.name
+    result_nwb_path = results_folder / input_nwb_path.name
+    copy_to = result_nwb_path if skip_ccf else scratch_nwb_path
+    if input_nwb_path.is_dir():
+        assert (input_nwb_path / ".zattrs").is_file(), f"{input_nwb_path.name} is not a valid Zarr folder"
         NWB_BACKEND = "zarr"
-        NWB_SUFFIX = ".nwb.zarr"
         io_class = NWBZarrIO
-    else:        
+        shutil.copytree(input_nwb_path, copy_to, dirs_exist_ok=True)
+    else:
         NWB_BACKEND = "hdf5"
-        NWB_SUFFIX = ".nwb"
         io_class = NWBHDF5IO
+        shutil.copyfile(input_nwb_path, copy_to)
     print(f"NWB backend: {NWB_BACKEND}")
+    if skip_ccf:
+        print('Skipping addition of CCF, outputting NWB file as-is')
+        return
+
+    probe_csvs = [p for p in input_csv_dir.iterdir() if p.name.endswith('sorted_ccf_regions.csv')]
+    assert len(probe_csvs) > 0, f'No CCF CSVs found to use. If CCF addition should be skipped, use `--skip_cff True`'
 
     print('Building CCF Map from .CSVs')
     ccf_map = build_ccf_map(probe_csvs)
 
-    print('Reading NWB in append mode:', nwbfile_input_path)
-    with io_class(str(nwbfile_input_path), mode='a') as read_io:
+    print('Reading NWB in append mode:', scratch_nwb_path)
+    with io_class(str(scratch_nwb_path), mode='a') as read_io:
         nwb = read_io.read()
 
         print('Getting new electrode columns')
@@ -100,11 +113,10 @@ def run():
         nwb.electrodes.add_column('y', 'ccf y coordinate', data=ys)
         nwb.electrodes.add_column('z', 'ccf z coordinate', data=zs)
 
-        nwbfile_output_path = results_folder / f"{nwbfile_input_path.stem}.nwb"
-        print('Exporting to NWB:',nwbfile_output_path)
-        with io_class(str(nwbfile_output_path), "w") as export_io:
+        print('Exporting to NWB:',result_nwb_path)
+        with io_class(str(result_nwb_path), "w") as export_io:
             export_io.export(src_io=read_io, nwbfile=nwb, write_args={'link_data': False})
-        print(f"Done writing {nwbfile_output_path}")
+        print(f"Done writing {result_nwb_path}")
 
 
 if __name__ == "__main__": run()
