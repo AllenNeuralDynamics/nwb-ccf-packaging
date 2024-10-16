@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 from hdmf_zarr.nwb import NWBZarrIO
+from pynwb import NWBHDF5IO
 import csv
 import os
 import shutil
