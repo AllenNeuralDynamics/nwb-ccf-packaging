@@ -31,8 +31,10 @@ def probe_name_from_file_name(csv_path):
             break
     if not probe_name:
         raise Exception('This file name does not appear to contain a probe name')
-    return probe_name[0].upper() + probe_name[1:-1] + probe_name[-1].upper()
+    return format_probe_name(probe_name)
 
+def format_probe_name(probe_name):
+    return probe_name[0].upper() + probe_name[1:-1] + probe_name[-1].upper()
 
 def build_ccf_map(probe_csvs):
     ccf_map = {}
@@ -50,7 +52,7 @@ def build_ccf_map(probe_csvs):
 def get_new_electrode_colums(nwb, ccf_map):
     locs, xs, ys, zs = [], [], [], []
     for row in nwb.electrodes:
-        probe_name = row['group_name'].item()
+        probe_name = format_probe_name(row['group_name'].item())
         channel_id = channel_name_to_idx(row['channel_name'].item())
         try:
             structure, x, y, z = ccf_map[probe_name, channel_id]
@@ -60,7 +62,7 @@ def get_new_electrode_colums(nwb, ccf_map):
         xs.append(x)
         ys.append(y)
         zs.append(z)
-    return locs, xs, ys, zs
+    return np.array(locs), np.array(xs), np.array(ys), np.array(zs)
 
 
 def run():
