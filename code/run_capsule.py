@@ -64,6 +64,12 @@ def get_new_electrode_colums(nwb, ccf_map):
         zs.append(z)
     return np.array(locs), np.array(xs), np.array(ys), np.array(zs)
 
+def hdf5_to_zarr(hdf5_path, zarr_path):
+    with NWBHDF5IO(hdf5_path, mode='r') as read_io:  # Create HDF5 IO object for read
+        with NWBZarrIO(str(zarr_path), 'w') as export_io:  # Create Zarr IO object for write
+            export_io.export(src_io=read_io, write_args=dict(link_data=False))  # Export from HDF5 to Zarr
+    print(f'zarr file made: {zarr_path}')
+    # shutil.rmtree(hdf5_path)
 
 def run():
     parser = argparse.ArgumentParser()
@@ -91,9 +97,13 @@ def run():
         io_class = NWBZarrIO
         shutil.copytree(input_nwb_path, copy_to, dirs_exist_ok=True)
     else:
-        NWB_BACKEND = "hdf5"
-        io_class = NWBHDF5IO
-        shutil.copyfile(input_nwb_path, copy_to)
+    #     NWB_BACKEND = "hdf5"
+    #     io_class = NWBHDF5IO
+    #     shutil.copyfile(input_nwb_path, copy_to)
+        NWB_BACKEND = "zarr"
+        io_class = NWBZarrIO
+        hdf5_to_zarr(input_nwb_path, scratch_nwb_path)
+
     print(f"NWB backend: {NWB_BACKEND}")
     if skip_ccf:
         print('Skipping addition of CCF, outputting NWB file as-is')
