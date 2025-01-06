@@ -87,22 +87,28 @@ def run():
     input_nwb_path = nwb_files[0]
     print('INPUT NWB', input_nwb_path)
 
+    # clear scratch dir if not empty
+    print(f'Emptying scratch dir {scratch_folder}')
+    for scratch_file in scratch_folder.iterdir():
+        shutil.rmtree(scratch_file)    
+
     # determine if file is zarr or hdf5, and copy it to results
     scratch_nwb_path = scratch_folder / input_nwb_path.name
     result_nwb_path = results_folder / input_nwb_path.name
     copy_to = result_nwb_path if skip_ccf else scratch_nwb_path
+    print(f"copying working files from {input_nwb_path} to {copy_to}")
     if input_nwb_path.is_dir():
         assert (input_nwb_path / ".zattrs").is_file(), f"{input_nwb_path.name} is not a valid Zarr folder"
         NWB_BACKEND = "zarr"
         io_class = NWBZarrIO
         shutil.copytree(input_nwb_path, copy_to, dirs_exist_ok=True)
     else:
-    #     NWB_BACKEND = "hdf5"
-    #     io_class = NWBHDF5IO
-    #     shutil.copyfile(input_nwb_path, copy_to)
-        NWB_BACKEND = "zarr"
-        io_class = NWBZarrIO
-        hdf5_to_zarr(input_nwb_path, scratch_nwb_path)
+        NWB_BACKEND = "hdf5"
+        io_class = NWBHDF5IO
+        shutil.copyfile(input_nwb_path, copy_to)
+    #    NWB_BACKEND = "zarr"
+    #    io_class = NWBZarrIO
+    #    hdf5_to_zarr(input_nwb_path, scratch_nwb_path)
 
     print(f"NWB backend: {NWB_BACKEND}")
     if skip_ccf:
@@ -116,6 +122,9 @@ def run():
     ccf_map = build_ccf_map(probe_csvs)
 
     print('Reading NWB in append mode:', scratch_nwb_path)
+    print(os.listdir(scratch_folder))
+    if scratch_nwb_path.is_dir():
+        print(os.listdir(scratch_nwb_path))
     with io_class(str(scratch_nwb_path), mode='a') as read_io:
         nwb = read_io.read()
 
