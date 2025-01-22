@@ -33,8 +33,10 @@ def probe_name_from_file_name(csv_path):
         raise Exception('This file name does not appear to contain a probe name')
     return format_probe_name(probe_name)
 
+
 def format_probe_name(probe_name):
     return probe_name[0].upper() + probe_name[1:-1] + probe_name[-1].upper()
+
 
 def build_ccf_map(probe_csvs):
     ccf_map = {}
@@ -44,7 +46,7 @@ def build_ccf_map(probe_csvs):
         probe_info = list(csv.reader(open(probe_csv_path)))
         for channel_id, structure, structure_id, x, y, z, horz, vert, valid, cort_depth in probe_info[1:]:
             print('adding', probe_name, int(channel_id))
-            ccf_map[probe_name, int(channel_id)] = [structure, x,y,z]
+            ccf_map[probe_name, int(channel_id)] = [structure, float(x),float(y),float(z)]
 
     return ccf_map
 
