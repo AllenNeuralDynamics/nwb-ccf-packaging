@@ -66,12 +66,14 @@ def get_new_electrode_colums(nwb, ccf_map):
         zs.append(z)
     return np.array(locs), np.array(xs), np.array(ys), np.array(zs)
 
+
 def hdf5_to_zarr(hdf5_path, zarr_path):
     with NWBHDF5IO(hdf5_path, mode='r') as read_io:  # Create HDF5 IO object for read
         with NWBZarrIO(str(zarr_path), 'w') as export_io:  # Create Zarr IO object for write
             export_io.export(src_io=read_io, write_args=dict(link_data=False))  # Export from HDF5 to Zarr
     print(f'zarr file made: {zarr_path}')
     # shutil.rmtree(hdf5_path)
+
 
 def run():
     parser = argparse.ArgumentParser()
@@ -92,7 +94,7 @@ def run():
     # clear scratch dir if not empty
     print(f'Emptying scratch dir {scratch_folder}')
     for scratch_file in scratch_folder.iterdir():
-        shutil.rmtree(scratch_file)    
+        shutil.rmtree(scratch_file)
 
     # determine if file is zarr or hdf5, and copy it to results
     scratch_nwb_path = scratch_folder / input_nwb_path.name
