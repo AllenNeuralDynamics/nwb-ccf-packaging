@@ -44,8 +44,8 @@ def build_ccf_map(probe_csvs):
         print('Reading',probe_csv_path)
         probe_name = probe_name_from_file_name(probe_csv_path)
         probe_info = list(csv.reader(open(probe_csv_path)))
+        print(f'Adding {len(probe_info)} rows for {probe_name}}')
         for channel_id, structure, structure_id, x, y, z, horz, vert, valid, cort_depth in probe_info[1:]:
-            print('adding', probe_name, int(channel_id))
             ccf_map[probe_name, int(channel_id)] = [structure, float(x),float(y),float(z)]
 
     return ccf_map
@@ -59,7 +59,7 @@ def get_new_electrode_colums(nwb, ccf_map):
         try:
             structure, x, y, z = ccf_map[probe_name, channel_id]
         except KeyError:
-            raise Exception(f"CCF information for an electrode ({probe_name}, channel {channel_id}) not found. Perhaps not enough CSVs were provided or the given CSVs don't match this session")
+            raise Exception(f"CCF information for an electrode {probe_name}, channel {channel_id} not found in ccf map. Perhaps not enough CSVs were provided or the given CSVs don't match this session")
         locs.append(structure)
         xs.append(x)
         ys.append(y)
@@ -122,7 +122,7 @@ def run():
     probe_csvs = [p for p in input_csv_dir.iterdir() if p.name.endswith('sorted_ccf_regions.csv')]
     assert len(probe_csvs) > 0, f'No CCF CSVs found to use. If CCF addition should be skipped, use `--skip_cff True`'
 
-    print('Building CCF Map from .CSVs')
+    print('Building CCF Map from .CSVs:\n{probe_csvs}')
     ccf_map = build_ccf_map(probe_csvs)
 
     print('Reading NWB in append mode:', scratch_nwb_path)
