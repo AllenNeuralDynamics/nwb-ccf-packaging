@@ -44,7 +44,7 @@ def build_ccf_map(probe_csvs):
         print('Reading',probe_csv_path)
         probe_name = probe_name_from_file_name(probe_csv_path)
         probe_info = list(csv.reader(open(probe_csv_path)))
-        print(f'Adding {len(probe_info)} rows for {probe_name}}')
+        print(f'Adding {len(probe_info)} rows for {probe_name}')
         for channel_id, structure, structure_id, x, y, z, horz, vert, valid, cort_depth in probe_info[1:]:
             ccf_map[probe_name, int(channel_id)] = [structure, float(x),float(y),float(z)]
 
