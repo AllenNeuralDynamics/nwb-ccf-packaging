@@ -122,7 +122,7 @@ def run():
     probe_csvs = [p for p in input_csv_dir.iterdir() if p.name.endswith('sorted_ccf_regions.csv')]
     assert len(probe_csvs) > 0, f'No CCF CSVs found to use. If CCF addition should be skipped, use `--skip_cff True`'
 
-    print('Building CCF Map from .CSVs:\n{probe_csvs}')
+    print(f'Building CCF Map from .CSVs:\n{probe_csvs}')
     ccf_map = build_ccf_map(probe_csvs)
 
     print('Reading NWB in append mode:', scratch_nwb_path)
