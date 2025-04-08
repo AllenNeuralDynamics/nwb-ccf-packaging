@@ -53,6 +53,7 @@ def build_ccf_map(probe_csvs):
 
 def get_new_electrode_colums(nwb, ccf_map):
     locs, xs, ys, zs = [], [], [], []
+    print("electrode columns:",len(nwb.electrodes))
     for row in nwb.electrodes:
         probe_name = format_probe_name(row['group_name'].item())
         channel_id = channel_name_to_idx(row['channel_name'].item())
@@ -94,7 +95,10 @@ def run():
     # clear scratch dir if not empty
     print(f'Emptying scratch dir {scratch_folder}')
     for scratch_file in scratch_folder.iterdir():
-        shutil.rmtree(scratch_file)
+        try:
+            shutil.rmtree(scratch_file)
+        except:
+            print("Failed to empty scratch file:", scratch_file)
 
     # determine if file is zarr or hdf5, and copy it to results
     scratch_nwb_path = scratch_folder / input_nwb_path.name
@@ -124,6 +128,7 @@ def run():
 
     print(f'Building CCF Map from .CSVs:\n {probe_csvs}')
     ccf_map = build_ccf_map(probe_csvs)
+    print("built ccf map with len", len(ccf_map))
 
     print('Reading NWB in append mode:', scratch_nwb_path)
     print(os.listdir(scratch_folder))
@@ -140,6 +145,7 @@ def run():
         nwb.electrodes.add_column('y', 'ccf y coordinate', data=ys)
         nwb.electrodes.add_column('z', 'ccf z coordinate', data=zs)
 
+        print("at end, electrodes table has len",len(nwb.electrodes))
         print('Exporting to NWB:',result_nwb_path)
         with io_class(str(result_nwb_path), "w") as export_io:
             export_io.export(src_io=read_io, nwbfile=nwb, write_args={'link_data': False})
