@@ -2,15 +2,17 @@
 
 from pathlib import Path
 from hdmf_zarr.nwb import NWBZarrIO
+from pynwb import NWBHDF5IO
 import csv
 import os
 import shutil
 from hdmf.common.table import DynamicTable
 import numpy as np
+import json
 
-data_folder = Path("../data/")
+data_folder = Path("/data/")
 scratch_folder = Path("../scratch/")
-results_folder = Path("../results/")
+results_folder = Path("/results/")
 
 # converts channel name of the form 'LFP1' or 'AP1' to idx of the form 0
 def channel_name_to_idx(channel_name):
@@ -32,13 +34,22 @@ def probe_name_from_file_name(csv_path):
     return probe_name[0].upper() + probe_name[1:-1] + probe_name[-1].upper()
 
 
-def build_ccf_map(probe_csvs):
+def build_ccf_map(ccf_json_files):
     ccf_map = {}
-    for probe_csv_path in probe_csvs:
-        print('Reading',probe_csv_path)
-        probe_name = probe_name_from_file_name(probe_csv_path)
-        probe_info = list(csv.reader(open(probe_csv_path)))
-        for channel_id, structure, structure_id, x, y, z, horz, vert, valid, cort_depth in probe_info[1:]:
+    for ccf_json_path in ccf_json_files:
+        print('Reading',ccf_json_path)
+        probe_name = ccf_json_path.parent.stem
+        probe_name = probe_name[0].lower() + probe_name[1:]
+        with open(ccf_json_path, 'r') as f:
+            ccf_json_info = json.load(f)
+
+        for channel in ccf_json_info:
+            channel_id = channel[channel.index('_') + 1:]
+            structure = ccf_json_info[channel]['brain_region']
+            x = ccf_json_info[channel]['x']
+            y = ccf_json_info[channel]['y']
+            z = ccf_json_info[channel]['z']
+
             ccf_map[probe_name, int(channel_id)] = [structure, x,y,z]
 
     return ccf_map
@@ -52,8 +63,9 @@ def get_new_electrode_colums(nwb, ccf_map):
         try:
             structure, x, y, z = ccf_map[probe_name, channel_id]
         except KeyError:
-            raise Exception(f"CCF information for an electrode ({probe_name}, channel {channel_id}) not found. Perhaps not enough CSVs were provided or the given CSVs don't match this session")
-        locs.append(structure)
+            print(f"CCF information for an electrode ({probe_name}, channel {channel_id}) not found. Perhaps no output from IBL alignment for {probe_name}")
+            continue
+
         xs.append(x)
         ys.append(y)
         zs.append(z)
@@ -61,7 +73,9 @@ def get_new_electrode_colums(nwb, ccf_map):
 
 
 def run():
-    probe_csvs = [p for p in (data_folder/'ccf').iterdir() if p.name.endswith('.csv')]
+    ccf_json_files = tuple(data_folder.rglob('ccf*.json'))
+    if not ccf_json_files:
+        raise FileNotFoundError('No ibl json output attached')
 
     # find base NWB file
     nwb_files = [p for p in (data_folder/'nwb').iterdir() if p.name.endswith(".nwb") or p.name.endswith(".nwb.zarr")]
@@ -71,7 +85,7 @@ def run():
     destination_dir = '/results/nwb'
     destination_path = os.path.join(destination_dir, os.path.basename(source_path))
     print(source_path, destination_path)
-    shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
+    #shutil.copy(source_path, destination_path, dirs_exist_ok=True)
     nwbfile_input_path = Path(destination_path)
 
     if nwbfile_input_path.is_dir():
@@ -86,7 +100,7 @@ def run():
     print(f"NWB backend: {NWB_BACKEND}")
 
     print('Building CCF Map from .CSVs')
-    ccf_map = build_ccf_map(probe_csvs)
+    ccf_map = build_ccf_map(ccf_json_files)
 
     print('Reading NWB in append mode:', nwbfile_input_path)
     with io_class(str(nwbfile_input_path), mode='a') as read_io:
