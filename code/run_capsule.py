@@ -82,7 +82,7 @@ def run():
     parser.add_argument("--input_nwb_dir", type=str, default=f'nwb')
     parser.add_argument("--input_csv_dir", type=str, default='ccf')
     args = parser.parse_args()
-    skip_ccf = args.skip_ccf == 'true'
+    skip_ccf = args.skip_ccf == 'True'
     input_nwb_dir = data_folder / Path(args.input_nwb_dir)
     input_csv_dir = data_folder / Path(args.input_csv_dir)
 
