@@ -1,90 +1,239 @@
-""" top level run script """
+"""top level run script"""
 
 import argparse
 from pathlib import Path
 from hdmf_zarr.nwb import NWBZarrIO
 from pynwb import NWBHDF5IO
 import csv
+import json
 import os
 import shutil
-from hdmf.common.table import DynamicTable
+from pathlib import Path
+import re
+import ibllib.atlas as atlas
+
+
 import numpy as np
+from hdmf.common.table import DynamicTable
+from hdmf_zarr.nwb import NWBZarrIO
+from pynwb import NWBHDF5IO
+import pandas as pd
 
 data_folder = Path("../data/")
 scratch_folder = Path("../scratch/")
 results_folder = Path("../results/")
 
+
+def extract_session_name_from_nwb(nwb_path):
+    match = re.match(r"(ecephys_\d+_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})", nwb_path.name)
+    if match:
+        return match.group(1)
+    return None
+
+
 # converts channel name of the form 'LFP1' or 'AP1' to idx of the form 0
 def channel_name_to_idx(channel_name):
-    stripped_name = channel_name.replace('LFP','').replace('AP','')
+    """
+    Convert a channel name to a corresponding channel index.
+
+    This function processes a channel name by removing specific substrings ('LFP' and 'AP')
+    and then attempts to convert the resulting string into an integer. The function returns
+    the integer index of the channel, adjusting by subtracting 1. If the conversion fails,
+    an exception is raised indicating an unexpected channel name format.
+
+    Parameters
+    ----------
+    channel_name : str
+        The name of the channel as a string. The function expects the name to possibly
+        include the substrings 'LFP' or 'AP', which will be removed during processing.
+
+    Returns
+    -------
+    int
+        The channel index, derived from the numerical part of the channel name, with
+        1 subtracted from it.
+    """
+    stripped_name = channel_name.replace("LFP", "").replace("AP", "")
     try:
-        return int(stripped_name)-1
+        return int(stripped_name) - 1
     except:
-        raise Exception('Unexpected channel name format')
+        raise Exception("Unexpected channel name format")
 
 
-def probe_name_from_file_name(csv_path):
-    probe_name = None
-    for string_segment in csv_path.stem.split('_'):
-        if string_segment.lower().startswith('probe'):
-            probe_name = string_segment
-            break
-    if not probe_name:
-        raise Exception('This file name does not appear to contain a probe name')
-    return format_probe_name(probe_name)
 
+def build_ccf_map(ccf_json_files) -> dict:
+    """
+    Build a CCF (Common Coordinate Framework) map from a list of JSON files.
 
-def format_probe_name(probe_name):
-    return probe_name[0].upper() + probe_name[1:-1] + probe_name[-1].upper()
+    This function processes multiple JSON files that describe the location and
+    structure of brain regions for different probes. It extracts the relevant
+    information from each JSON file and constructs a dictionary mapping each probe
+    and channel to the corresponding brain region and coordinates (x, y, z).
 
+    Parameters
+    ----------
+    ccf_json_files : list of pathlib.Path
+        A list of file paths (as Path objects) to the JSON files containing CCF data.
+        Each file is expected to have data for various channels, with information
+        on the brain region and the corresponding coordinates.
 
-def build_ccf_map(probe_csvs):
+    Returns
+    -------
+    dict
+        A dictionary where the keys are tuples of the form `(probe_name, channel_id)`,
+        and the values are lists containing the structure name and coordinates `[structure, x, y, z]`.
+    """
     ccf_map = {}
-    for probe_csv_path in probe_csvs:
-        print('Reading',probe_csv_path)
-        probe_name = probe_name_from_file_name(probe_csv_path)
-        probe_info = list(csv.reader(open(probe_csv_path)))
-        print(f'Adding {len(probe_info)} rows for {probe_name}')
-        for channel_id, structure, structure_id, x, y, z, horz, vert, valid, cort_depth in probe_info[1:]:
-            ccf_map[probe_name, int(channel_id)] = [structure, float(x),float(y),float(z)]
+    for ccf_json_path in ccf_json_files:
+        print("Reading", ccf_json_path)
+        probe_name = ccf_json_path.parent.stem
+        probe_name = probe_name[0].lower() + probe_name[1:]
+        with open(ccf_json_path, "r") as f:
+            ccf_json_info = json.load(f)
+
+        for channel in ccf_json_info:
+            try:
+                channel_id = channel[channel.index("_") + 1 :]
+            except:
+                print(f'skipping channel {channel}')    
+                continue
+            structure = ccf_json_info[channel]["brain_region"]
+            x = ccf_json_info[channel]["x"]
+            y = ccf_json_info[channel]["y"]
+            z = ccf_json_info[channel]["z"]
+
+            ccf_map[probe_name, int(channel_id)] = [structure, x, y, z]
 
     return ccf_map
 
 
+def correct_isi_locations(ccf_map, area_classifications):
+    print(area_classifications)
+    for index, row in area_classifications.iterrows():
+        probe_name = f"probe{row['Probe']}"
+        corrected_area = row['Area']
+        if corrected_area.lower() == 'nonvis':
+            continue
+
+        print(f'Correcting {probe_name} visual areas with {corrected_area}')
+        n_corrected_areas = 0
+        for electrode in ccf_map:
+            electrode_region = ccf_map[electrode][0]
+            if 'vis' in electrode_region.lower():
+                ccf_map[electrode][0] = corrected_area
+                n_corrected_areas += 1
+
+        print(f'Corrected {n_corrected_areas} areas')
+
+    return ccf_map
+
+def get_isi_column(nwb, area_classifications):
+    """
+    """
+    print(area_classifications)
+    isi_locs = []
+    print("electrode columns:",len(nwb.electrodes))
+    for row in nwb.electrodes:
+        probe_name = row["group_name"].item()
+        probe_letter = probe_name[-1].upper()
+        targeted_area = area_classifications.loc[area_classifications['Probe'] == probe_letter, 'Area'].iloc[0]
+
+        isi_locs.append(targeted_area)
+
+    assert len(isi_locs) == len(nwb.electrodes)
+    return np.array(isi_locs)
+
+
 def get_new_electrode_colums(nwb, ccf_map):
+    """
+    Extract the anatomical location (brain region) and coordinates (x, y, z)
+    for each electrode from the provided NWB file and CCF map.
+
+    This function loops over all electrodes in the given NWB file, retrieves
+    the probe name and channel ID, and looks up the corresponding brain region
+    and coordinates from the CCF map. It returns the lists of brain regions and
+    coordinates for the electrodes.
+
+    Parameters
+    ----------
+    nwb : pynwb.file.NWBFile
+        An NWB (Neurodata Without Borders) file containing electrode information
+        (e.g., electrode group names and channel names).
+
+    ccf_map : dict
+        A dictionary mapping probe names and channel IDs (as tuples) to the
+        corresponding brain region and coordinates. Each key is a tuple of the form
+        `(probe_name, channel_id)`, and each value is a list `[structure, x, y, z]`.
+
+    Returns
+    -------
+    tuple of lists
+        A tuple containing four lists:
+        - `locs`: A list of brain regions (structure names) corresponding to each electrode.
+        - `xs`: A list of x-coordinates for each electrode.
+        - `ys`: A list of y-coordinates for each electrode.
+        - `zs`: A list of z-coordinates for each electrode.
+    """
     locs, xs, ys, zs = [], [], [], []
     print("electrode columns:",len(nwb.electrodes))
     for row in nwb.electrodes:
-        probe_name = format_probe_name(row['group_name'].item())
-        channel_id = channel_name_to_idx(row['channel_name'].item())
+        probe_name = row["group_name"].item()
+        probe_name = probe_name.replace(" ", "")
+        probe_name = probe_name[0].lower() + probe_name[1:]
+        channel_id = channel_name_to_idx(row["channel_name"].item())
         try:
             structure, x, y, z = ccf_map[probe_name, channel_id]
         except KeyError:
-            raise Exception(f"CCF information for an electrode {probe_name}, channel {channel_id} not found in ccf map. Perhaps not enough CSVs were provided or the given CSVs don't match this session")
+            raise Exception(
+                f"CCF information for an electrode ({probe_name}, channel {channel_id}) not found. Perhaps no output from IBL alignment for {probe_name}"
+            )
+
         locs.append(structure)
         xs.append(x)
         ys.append(y)
         zs.append(z)
+
+    assert len(locs) == len(nwb.electrodes)
     return np.array(locs), np.array(xs), np.array(ys), np.array(zs)
 
 
-def hdf5_to_zarr(hdf5_path, zarr_path):
-    with NWBHDF5IO(hdf5_path, mode='r') as read_io:  # Create HDF5 IO object for read
-        with NWBZarrIO(str(zarr_path), 'w') as export_io:  # Create Zarr IO object for write
-            export_io.export(src_io=read_io, write_args=dict(link_data=False))  # Export from HDF5 to Zarr
-    print(f'zarr file made: {zarr_path}')
-    # shutil.rmtree(hdf5_path)
+def zarr_to_hdf5(zarr_path, output_dir):
+    hdf5_path = output_dir / zarr_path.name
+    with NWBZarrIO(str(zarr_path), mode='r') as read_io:  # Create Zarr IO object for read
+        with NWBHDF5IO(hdf5_path, 'w') as export_io:  # Create HDF5 IO object for write
+            export_io.export(src_io=read_io, write_args=dict(link_data=False))  # Export from Zarr to HDF5
+    print(f'hdf5 file made: {hdf5_path}')
+
+
+def empty_folder(path):
+    for file in path.iterdir():
+        try:
+            if file.is_symlink() or file.is_file():
+                file.unlink()
+            else:
+                shutil.rmtree(file)
+
+        except Exception as e:
+            print(f"Failed to empty {file} from folder:", path, 'error:', e)
 
 
 def run():
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip_ccf", type=str, default='false')
+    parser.add_argument("--only_regions", type=str, default='false')
+    parser.add_argument("--isi_correction", type=str, default='True')
+    parser.add_argument("--behavior_dir", type=str, default="session/behavior")
     parser.add_argument("--input_nwb_dir", type=str, default=f'nwb')
-    parser.add_argument("--input_csv_dir", type=str, default='ccf')
+    # parser.add_argument("--input_csv_dir", type=str, default='ccf')
+    parser.add_argument("--input_ccf_dir", type=str, default="ccf")
+
     args = parser.parse_args()
-    skip_ccf = args.skip_ccf == 'True'
+    skip_ccf = args.skip_ccf in ['True','true','T','t']
+    only_regions = args.only_regions in ['True','true','T','t']
+    isi_correction = args.isi_correction in ['True','true','T','t']
+    behavior_dir = data_folder / Path(args.behavior_dir)
     input_nwb_dir = data_folder / Path(args.input_nwb_dir)
-    input_csv_dir = data_folder / Path(args.input_csv_dir)
+    input_ccf_dir = data_folder / Path(args.input_ccf_dir)
 
     print('INPUT NWB DIR', input_nwb_dir)
     nwb_files = [p for p in input_nwb_dir.iterdir() if p.name.endswith(".nwb") or p.name.endswith(".nwb.zarr")]
@@ -94,56 +243,68 @@ def run():
 
     # clear scratch dir if not empty
     print(f'Emptying scratch dir {scratch_folder}')
-    for scratch_file in scratch_folder.iterdir():
-        try:
-            shutil.rmtree(scratch_file)
-        except:
-            print("Failed to empty scratch file:", scratch_file)
+    empty_folder(scratch_folder)
+
+    # clear results dir if not empty
+    print(f'Emptying results dir {results_folder}')
+    empty_folder(results_folder)
 
     # determine if file is zarr or hdf5, and copy it to results
     scratch_nwb_path = scratch_folder / input_nwb_path.name
     result_nwb_path = results_folder / input_nwb_path.name
-    copy_to = result_nwb_path if skip_ccf else scratch_nwb_path
-    print(f"copying working files from {input_nwb_path} to {copy_to}")
+    copied_nwb_path = result_nwb_path if skip_ccf else scratch_nwb_path
+    print(f"copying working files from {input_nwb_path} to {copied_nwb_path}")
     if input_nwb_path.is_dir():
+        # NWB_BACKEND = "hdf5"
+        # io_class = NWBHDF5IO
+        # zarr_to_hdf5(input_nwb_path, copied_nwb_path.parent)
         assert (input_nwb_path / ".zattrs").is_file(), f"{input_nwb_path.name} is not a valid Zarr folder"
         NWB_BACKEND = "zarr"
         io_class = NWBZarrIO
-        shutil.copytree(input_nwb_path, copy_to, dirs_exist_ok=True)
+        shutil.copytree(input_nwb_path, copied_nwb_path, dirs_exist_ok=True)
     else:
         NWB_BACKEND = "hdf5"
         io_class = NWBHDF5IO
-        shutil.copyfile(input_nwb_path, copy_to)
-    #    NWB_BACKEND = "zarr"
-    #    io_class = NWBZarrIO
-    #    hdf5_to_zarr(input_nwb_path, scratch_nwb_path)
+        shutil.copyfile(input_nwb_path, copied_nwb_path)
 
     print(f"NWB backend: {NWB_BACKEND}")
     if skip_ccf:
         print('Skipping addition of CCF, outputting NWB file as-is')
         return
 
-    probe_csvs = [p for p in input_csv_dir.iterdir() if p.name.endswith('sorted_ccf_regions.csv')]
-    assert len(probe_csvs) > 0, f'No CCF CSVs found to use. If CCF addition should be skipped, use `--skip_cff True`'
+    session_id = extract_session_name_from_nwb(input_nwb_path)
+    print(f'Looking for CCF for session_id {session_id}')
+    ccf_json_files = tuple(input_ccf_dir.rglob(f"**/{session_id}/**/Probe*/*locations*.json"))
+    if not ccf_json_files:
+        raise FileNotFoundError("No IBL jsons attached")
+    print(f"Found {len(ccf_json_files)} ccf jsons")
 
-    print(f'Building CCF Map from .CSVs:\n {probe_csvs}')
-    ccf_map = build_ccf_map(probe_csvs)
-    print("built ccf map with len", len(ccf_map))
+    # probe_csvs = [p for p in input_csv_dir.iterdir() if p.name.endswith('sorted_ccf_regions.csv')]
+    # assert len(probe_csvs) > 0, f'No CCF CSVs found to use. If CCF addition should be skipped, use `--skip_cff True`'
 
-    print('Reading NWB in append mode:', scratch_nwb_path)
-    print(os.listdir(scratch_folder))
-    if scratch_nwb_path.is_dir():
-        print(os.listdir(scratch_nwb_path))
-    with io_class(str(scratch_nwb_path), mode='a') as read_io:
+    print("Building CCF Map from IBL jsons")
+    print(repr(only_regions))
+    ccf_map = build_ccf_map(ccf_json_files)
+
+    print("Reading NWB in append mode:", result_nwb_path)
+    print(repr(only_regions))
+    with io_class(str(copied_nwb_path), mode="a") as read_io:
         nwb = read_io.read()
 
-        print('Getting new electrode columns')
+        print("Getting new electrode columns")
+        print(repr(only_regions))
         locs, xs, ys, zs = get_new_electrode_colums(nwb, ccf_map)
 
         nwb.electrodes.location.data[:] = np.array(locs)
-        nwb.electrodes.add_column('x', 'ccf x coordinate', data=xs)
-        nwb.electrodes.add_column('y', 'ccf y coordinate', data=ys)
-        nwb.electrodes.add_column('z', 'ccf z coordinate', data=zs)
+        if not only_regions:
+            nwb.electrodes.add_column("x", "ccf x coordinate", data=xs)
+            nwb.electrodes.add_column("y", "ccf y coordinate", data=ys)
+            nwb.electrodes.add_column("z", "ccf z coordinate", data=zs)
+
+        if isi_correction:
+            area_classifications = pd.read_csv(next(behavior_dir.rglob('*areaClassifications.csv')))
+            isi_column = get_isi_column(nwb, area_classifications)
+            nwb.electrodes.add_column("isi_region", "ISI mapped targeted location", data=isi_column)
 
         print("at end, electrodes table has len",len(nwb.electrodes))
         print('Exporting to NWB:',result_nwb_path)
@@ -152,4 +313,5 @@ def run():
         print(f"Done writing {result_nwb_path}")
 
 
-if __name__ == "__main__": run()
+if __name__ == "__main__":
+    run()
