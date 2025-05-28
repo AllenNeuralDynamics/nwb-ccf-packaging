@@ -294,6 +294,12 @@ def run():
         print("Getting new electrode columns")
         print(repr(only_regions))
         locs, xs, ys, zs = get_new_electrode_colums(nwb, ccf_map)
+        if len(locs) < len(nwb.electrodes):
+            for i in range(len(nwb.electrodes) - len(locs)):
+                locs.append("unknown")
+                xs.append(np.nan)
+                ys.append(np.nan)
+                zs.append(np.nan)
 
         nwb.electrodes.location.data[:] = np.array(locs)
         if not only_regions:
