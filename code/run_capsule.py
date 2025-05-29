@@ -310,7 +310,7 @@ def run():
         if isi_correction:
             area_classifications = pd.read_csv(next(behavior_dir.rglob('*areaClassifications.csv')))
             isi_column = get_isi_column(nwb, area_classifications)
-            nwb.electrodes.add_column("isi_region", "ISI mapped targeted location", data=isi_column)
+            nwb.electrodes.add_column("isi_targeted_location", "ISI mapped targeted location", data=isi_column)
 
         print("at end, electrodes table has len",len(nwb.electrodes))
         print('Exporting to NWB:',result_nwb_path)
