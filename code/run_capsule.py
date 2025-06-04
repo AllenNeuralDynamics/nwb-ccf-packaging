@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 import re
 import ibllib.atlas as atlas
-
+from typing import Union
 
 import numpy as np
 from hdmf.common.table import DynamicTable
@@ -19,9 +19,72 @@ from hdmf_zarr.nwb import NWBZarrIO
 from pynwb import NWBHDF5IO
 import pandas as pd
 
-data_folder = Path("../data/")
-scratch_folder = Path("../scratch/")
-results_folder = Path("../results/")
+import ibllib.atlas as atlas
+import SimpleITK as sitk
+
+data_folder = Path("/data/")
+scratch_folder = Path("/scratch/")
+results_folder = Path("/results/")
+
+RESOLUTION_UM = 25
+
+def _verify_point(point: int, bound: int) -> None:
+    """
+    Verify that a point index is within the valid bounds.
+
+    Parameters
+    ----------
+    point : int
+        The point index to verify (e.g., voxel index along one axis).
+
+    bound : int
+        The exclusive upper bound (e.g., size of the axis). The valid range is [0, bound).
+
+    Raises
+    ------
+    ValueError
+        If the point is negative or greater than or equal to the bound.
+    """
+    if point < 0 or point >= bound:
+        raise ValueError(f"Value {point} does not fall within range of 0 to {bound}")
+
+def convert_ibl_bregma_to_ccf_microns(brain_atlas: atlas.AllenAtlas, ccf_volume: sitk.Image, ccf_array: np.ndarray, point: tuple[int, int, int]) -> tuple[int, int, int]:
+    """
+    Convert a coordinate from IBL Bregma space to Common Coordinate Framework (CCF) space.
+
+    Parameters
+    ----------
+    brain_atlas : atlas.AllenAtlas
+        An instance of the AllenAtlas from the ibllib.atlas
+    
+    ccf_volume : sitk.Image
+        A SimpleITK image representing the CCF volume, used for coordinate transformation.
+    
+    ccf_array: np.ndarray
+        Array represent the CCF volume. Shape (ml, dv, ap)
+
+    point : tuple of int
+        A 3D point (x, y, z) in IBL Bregma space to be converted to CCF coordinates.
+
+    Returns
+    -------
+    tuple of int
+        The corresponding 3D point (x, y, z) in CCF space in microns.
+        x - AP
+        y - DV
+        z - ML
+    """
+    ccf_point = brain_atlas.xyz2ccf(np.array(point), ccf_order='mlapdv', mode='wrap')
+    ccf_point_indices = np.array(ccf_volume.TransformPhysicalPointToIndex(ccf_point / 1e3)) # returns point in order AP-DV-ML
+    ccf_point_indices[2] = -ccf_point_indices[2]
+    ccf_point_indices[1] = -ccf_point_indices[1]
+
+    # check points are within bounds 
+    _verify_point(ccf_point_indices[0], ccf_array.shape[2]) # AP
+    _verify_point(ccf_point_indices[1], ccf_array.shape[1]) # DV
+    _verify_point(ccf_point_indices[2], ccf_array.shape[0]) # ML
+
+    return ccf_point_indices * RESOLUTION_UM
 
 
 def extract_session_name_from_nwb(nwb_path):
@@ -61,7 +124,7 @@ def channel_name_to_idx(channel_name):
 
 
 
-def build_ccf_map(ccf_json_files) -> dict:
+def build_ccf_map(ccf_json_files, ccf_volume: sitk.Image, brain_atlas: Union[atlas.AllenAtlas, None] = None) -> dict:
     """
     Build a CCF (Common Coordinate Framework) map from a list of JSON files.
 
@@ -77,6 +140,12 @@ def build_ccf_map(ccf_json_files) -> dict:
         Each file is expected to have data for various channels, with information
         on the brain region and the corresponding coordinates.
 
+    ccf_volume : sitk.Image
+        A SimpleITK image representing the CCF volume, used for coordinate transformation.
+
+    brain_atlas: Union[atlas.AllenAtlas, None]. Default None
+        An instance of the AllenAtlas from the ibllib.atlas
+
     Returns
     -------
     dict
@@ -84,6 +153,8 @@ def build_ccf_map(ccf_json_files) -> dict:
         and the values are lists containing the structure name and coordinates `[structure, x, y, z]`.
     """
     ccf_map = {}
+    ccf_array = sitk.GetArrayFromImage(ccf_volume)
+
     for ccf_json_path in ccf_json_files:
         print("Reading", ccf_json_path)
         probe_name = ccf_json_path.parent.stem
@@ -102,7 +173,17 @@ def build_ccf_map(ccf_json_files) -> dict:
             y = ccf_json_info[channel]["y"]
             z = ccf_json_info[channel]["z"]
 
-            ccf_map[probe_name, int(channel_id)] = [structure, x, y, z]
+            if brain_atlas is not None:
+                ccf_point_microns = convert_ibl_bregma_to_ccf_microns(brain_atlas, ccf_volume, ccf_array (x, y, z))
+            else:
+                ccf_point_indices = np.array(ccf_volume.TransformPhysicalPointToIndex(np.array(x, y, z)))
+                # check points are within bounds 
+                _verify_point(ccf_point_indices[0], ccf_array.shape[2]) # AP
+                _verify_point(ccf_point_indices[1], ccf_array.shape[1]) # DV
+                _verify_point(ccf_point_indices[2], ccf_array.shape[0]) # ML
+                ccf_point_microns = ccf_point_indices * RESOLUTION_UM
+            
+            ccf_map[probe_name, int(channel_id)] = [structure, ccf_point_microns[0], ccf_point_microns[1], ccf_point_microns[2]]
 
     return ccf_map
 
@@ -226,11 +307,14 @@ def run():
     parser.add_argument("--input_nwb_dir", type=str, default=f'nwb')
     # parser.add_argument("--input_csv_dir", type=str, default='ccf')
     parser.add_argument("--input_ccf_dir", type=str, default="ccf")
+    parser.add_argument("--convert_ibl_bregma_to_ccf", type=str, default='false')
 
     args = parser.parse_args()
     skip_ccf = args.skip_ccf in ['True','true','T','t']
     only_regions = args.only_regions in ['True','true','T','t']
     isi_correction = args.isi_correction in ['True','true','T','t']
+    convert_ibl_bregma_to_ccf = args.convert_ibl_bregma_to_ccf in ['True','true','T','t']
+
     behavior_dir = data_folder / Path(args.behavior_dir)
     input_nwb_dir = data_folder / Path(args.input_nwb_dir)
     input_ccf_dir = data_folder / Path(args.input_ccf_dir)
@@ -282,9 +366,17 @@ def run():
     # probe_csvs = [p for p in input_csv_dir.iterdir() if p.name.endswith('sorted_ccf_regions.csv')]
     # assert len(probe_csvs) > 0, f'No CCF CSVs found to use. If CCF addition should be skipped, use `--skip_cff True`'
 
+    brain_atlas = None
+    ccf_volume = sitk.ReadImage('/root/capsule/data/allen_mouse_ccf/annotation/ccf_2017/annotation_25.nii.gz')
+    print("Starting to add to NWB. Coordinates will be in microns")
+    if convert_ibl_bregma_to_ccf:
+        print("Alignment was done in IBL bregma space. Will be converting back to CCF")
+        # resolution of Allen CCF atlas
+        brain_atlas = atlas.AllenAtlas(RESOLUTION_UM)
+
     print("Building CCF Map from IBL jsons")
     print(repr(only_regions))
-    ccf_map = build_ccf_map(ccf_json_files)
+    ccf_map = build_ccf_map(ccf_json_files, ccf_volume, brain_atlas=brain_atlas)
 
     print("Reading NWB in append mode:", result_nwb_path)
     print(repr(only_regions))
