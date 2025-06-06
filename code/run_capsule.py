@@ -174,9 +174,9 @@ def build_ccf_map(ccf_json_files, ccf_volume: sitk.Image, brain_atlas: Union[atl
             z = ccf_json_info[channel]["z"]
 
             if brain_atlas is not None:
-                ccf_point_microns = convert_ibl_bregma_to_ccf_microns(brain_atlas, ccf_volume, ccf_array (x, y, z))
+                ccf_point_microns = convert_ibl_bregma_to_ccf_microns(brain_atlas, ccf_volume, ccf_array, (x, y, z))
             else:
-                ccf_point_indices = np.array(ccf_volume.TransformPhysicalPointToIndex(np.array(x, y, z)))
+                ccf_point_indices = np.array(ccf_volume.TransformPhysicalPointToIndex(np.array((x, y, z))))
                 # check points are within bounds 
                 _verify_point(ccf_point_indices[0], ccf_array.shape[2]) # AP
                 _verify_point(ccf_point_indices[1], ccf_array.shape[1]) # DV
@@ -219,7 +219,15 @@ def get_isi_column(nwb, area_classifications):
         probe_letter = probe_name[-1].upper()
         targeted_area = area_classifications.loc[area_classifications['Probe'] == probe_letter, 'Area'].iloc[0]
 
-        isi_locs.append(targeted_area)
+        ccf_location = row["location"].item()
+        match = re.match(r'^\D*', ccf_location)
+        unlayered_location = match.group()
+        layer = ccf_location[match.end():]
+
+        if 'vis' in unlayered_location.lower() and unlayered_location != targeted_area and targeted_area.lower() != 'nonvis':
+            isi_locs.append(targeted_area + layer)
+        else:
+            isi_locs.append(ccf_location)
 
     assert len(isi_locs) == len(nwb.electrodes)
     return np.array(isi_locs)
@@ -310,10 +318,10 @@ def run():
     parser.add_argument("--convert_ibl_bregma_to_ccf", type=str, default='false')
 
     args = parser.parse_args()
-    skip_ccf = args.skip_ccf in ['True','true','T','t']
-    only_regions = args.only_regions in ['True','true','T','t']
-    isi_correction = args.isi_correction in ['True','true','T','t']
-    convert_ibl_bregma_to_ccf = args.convert_ibl_bregma_to_ccf in ['True','true','T','t']
+    skip_ccf = args.skip_ccf in ('True','true','T','t')
+    only_regions = args.only_regions in ('True','true','T','t')
+    isi_correction = args.isi_correction in ('True','true','T','t')
+    convert_ibl_bregma_to_ccf = args.convert_ibl_bregma_to_ccf in ('True','true','T','t')
 
     behavior_dir = data_folder / Path(args.behavior_dir)
     input_nwb_dir = data_folder / Path(args.input_nwb_dir)
