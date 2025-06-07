@@ -375,7 +375,7 @@ def run():
     # assert len(probe_csvs) > 0, f'No CCF CSVs found to use. If CCF addition should be skipped, use `--skip_cff True`'
 
     brain_atlas = None
-    ccf_volume = sitk.ReadImage('/root/capsule/data/allen_mouse_ccf/annotation/ccf_2017/annotation_25.nii.gz')
+    ccf_volume = sitk.ReadImage(data_folder / 'allen_mouse_ccf/annotation/ccf_2017/annotation_25.nii.gz')
     print("Starting to add to NWB. Coordinates will be in microns")
     if convert_ibl_bregma_to_ccf:
         print("Alignment was done in IBL bregma space. Will be converting back to CCF")
