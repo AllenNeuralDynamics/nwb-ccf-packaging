@@ -183,7 +183,8 @@ def build_ccf_map(ccf_json_files, ccf_volume: sitk.Image, brain_atlas: Union[atl
                 _verify_point(ccf_point_indices[2], ccf_array.shape[0]) # ML
                 ccf_point_microns = ccf_point_indices * RESOLUTION_UM
             
-            ccf_map[probe_name, int(channel_id)] = [structure, ccf_point_microns[0], ccf_point_microns[1], ccf_point_microns[2]]
+            x,y,z = float(ccf_point_microns[0]), float(ccf_point_microns[1]), float(ccf_point_microns[2])
+            ccf_map[probe_name, int(channel_id)] = [structure, x, y, z]
 
     return ccf_map
 
