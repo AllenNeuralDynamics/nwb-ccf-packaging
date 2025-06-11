@@ -225,7 +225,9 @@ def get_isi_column(nwb, area_classifications):
         unlayered_location = match.group()
         layer = ccf_location[match.end():]
 
-        if 'vis' in unlayered_location.lower() and unlayered_location != targeted_area and targeted_area.lower() != 'nonvis':
+        if ccf_location == 'unknown':
+            isi_locs.append(targeted_area)
+        elif 'vis' in unlayered_location.lower() and unlayered_location != targeted_area and targeted_area.lower() not in 'nonvis':
             isi_locs.append(targeted_area + layer)
         else:
             isi_locs.append(ccf_location)
@@ -310,7 +312,6 @@ def empty_folder(path):
 def run():
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip_ccf", type=str, default='false')
-    parser.add_argument("--only_regions", type=str, default='false')
     parser.add_argument("--isi_correction", type=str, default='True')
     parser.add_argument("--behavior_dir", type=str, default="session/behavior")
     parser.add_argument("--input_nwb_dir", type=str, default=f'nwb')
@@ -320,7 +321,6 @@ def run():
 
     args = parser.parse_args()
     skip_ccf = args.skip_ccf in ('True','true','T','t')
-    only_regions = args.only_regions in ('True','true','T','t')
     isi_correction = args.isi_correction in ('True','true','T','t')
     convert_ibl_bregma_to_ccf = args.convert_ibl_bregma_to_ccf in ('True','true','T','t')
 
@@ -345,7 +345,7 @@ def run():
     # determine if file is zarr or hdf5, and copy it to results
     scratch_nwb_path = scratch_folder / input_nwb_path.name
     result_nwb_path = results_folder / input_nwb_path.name
-    copied_nwb_path = result_nwb_path if skip_ccf else scratch_nwb_path
+    copied_nwb_path = scratch_nwb_path
     print(f"copying working files from {input_nwb_path} to {copied_nwb_path}")
     if input_nwb_path.is_dir():
         # NWB_BACKEND = "hdf5"
@@ -362,48 +362,41 @@ def run():
 
     print(f"NWB backend: {NWB_BACKEND}")
     if skip_ccf:
-        print('Skipping addition of CCF, outputting NWB file as-is')
-        return
+        print('Skipping addition of CCF IBL data')
+    else:
+        session_id = extract_session_name_from_nwb(input_nwb_path)
+        print(f'Looking for CCF for session_id {session_id}')
+        ccf_json_files = tuple(input_ccf_dir.rglob(f"**/{session_id}/**/Probe*/*locations*.json"))
+        if not ccf_json_files:
+            raise FileNotFoundError("No IBL jsons attached")
+        print(f"Found {len(ccf_json_files)} ccf jsons")
 
-    session_id = extract_session_name_from_nwb(input_nwb_path)
-    print(f'Looking for CCF for session_id {session_id}')
-    ccf_json_files = tuple(input_ccf_dir.rglob(f"**/{session_id}/**/Probe*/*locations*.json"))
-    if not ccf_json_files:
-        raise FileNotFoundError("No IBL jsons attached")
-    print(f"Found {len(ccf_json_files)} ccf jsons")
+        brain_atlas = None
+        ccf_volume = sitk.ReadImage(data_folder / 'allen_mouse_ccf/annotation/ccf_2017/annotation_25.nii.gz')
+        print("Starting to add to NWB. Coordinates will be in microns")
+        if convert_ibl_bregma_to_ccf:
+            print("Alignment was done in IBL bregma space. Will be converting back to CCF")
+            # resolution of Allen CCF atlas
+            brain_atlas = atlas.AllenAtlas(RESOLUTION_UM)
 
-    # probe_csvs = [p for p in input_csv_dir.iterdir() if p.name.endswith('sorted_ccf_regions.csv')]
-    # assert len(probe_csvs) > 0, f'No CCF CSVs found to use. If CCF addition should be skipped, use `--skip_cff True`'
-
-    brain_atlas = None
-    ccf_volume = sitk.ReadImage(data_folder / 'allen_mouse_ccf/annotation/ccf_2017/annotation_25.nii.gz')
-    print("Starting to add to NWB. Coordinates will be in microns")
-    if convert_ibl_bregma_to_ccf:
-        print("Alignment was done in IBL bregma space. Will be converting back to CCF")
-        # resolution of Allen CCF atlas
-        brain_atlas = atlas.AllenAtlas(RESOLUTION_UM)
-
-    print("Building CCF Map from IBL jsons")
-    print(repr(only_regions))
-    ccf_map = build_ccf_map(ccf_json_files, ccf_volume, brain_atlas=brain_atlas)
+        print("Building CCF Map from IBL jsons")
+        ccf_map = build_ccf_map(ccf_json_files, ccf_volume, brain_atlas=brain_atlas)
 
     print("Reading NWB in append mode:", result_nwb_path)
-    print(repr(only_regions))
     with io_class(str(copied_nwb_path), mode="a") as read_io:
         nwb = read_io.read()
 
-        print("Getting new electrode columns")
-        print(repr(only_regions))
-        locs, xs, ys, zs = get_new_electrode_colums(nwb, ccf_map)
-        if len(locs) < len(nwb.electrodes):
-            for i in range(len(nwb.electrodes) - len(locs)):
-                locs.append("unknown")
-                xs.append(np.nan)
-                ys.append(np.nan)
-                zs.append(np.nan)
+        if not skip_ccf:
+            print("Getting new electrode columns")
+            locs, xs, ys, zs = get_new_electrode_colums(nwb, ccf_map)
+            if len(locs) < len(nwb.electrodes):
+                for i in range(len(nwb.electrodes) - len(locs)):
+                    locs.append("unknown")
+                    xs.append(np.nan)
+                    ys.append(np.nan)
+                    zs.append(np.nan)
 
-        nwb.electrodes.location.data[:] = np.array(locs)
-        if not only_regions:
+            nwb.electrodes.location.data[:] = np.array(locs)
             nwb.electrodes.add_column("x", "ccf x coordinate", data=xs)
             nwb.electrodes.add_column("y", "ccf y coordinate", data=ys)
             nwb.electrodes.add_column("z", "ccf z coordinate", data=zs)
