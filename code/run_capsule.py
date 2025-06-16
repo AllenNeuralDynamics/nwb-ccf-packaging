@@ -209,6 +209,7 @@ def correct_isi_locations(ccf_map, area_classifications):
 
     return ccf_map
 
+
 def get_isi_column(nwb, area_classifications):
     """
     """
@@ -218,7 +219,11 @@ def get_isi_column(nwb, area_classifications):
     for row in nwb.electrodes:
         probe_name = row["group_name"].item()
         probe_letter = probe_name[-1].upper()
-        targeted_area = area_classifications.loc[area_classifications['Probe'] == probe_letter, 'Area'].iloc[0]
+        try:
+            targeted_area = area_classifications.loc[area_classifications['Probe'] == probe_letter, 'Area'].iloc[0]
+        except:
+            isi_locs.append('Uninserted')
+            continue
 
         ccf_location = row["location"].item()
         match = re.match(r'^\D*', ccf_location)
