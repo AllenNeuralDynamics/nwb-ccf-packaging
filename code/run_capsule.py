@@ -230,6 +230,9 @@ def get_isi_column(nwb, area_classifications):
         unlayered_location = match.group()
         layer = ccf_location[match.end():]
 
+        if 'ssp' in unlayered_location.lower():
+            print(probe_letter, targeted_area, ccf_location, layer)
+
         if ccf_location == 'unknown':
             isi_locs.append(targeted_area)
         elif 'vis' in unlayered_location.lower() and unlayered_location != targeted_area and targeted_area.lower() != 'nonvis':
