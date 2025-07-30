@@ -237,7 +237,7 @@ def get_isi_column(nwb, area_classifications):
             isi_locs.append(targeted_area)
         elif 'vis' in unlayered_location.lower() and unlayered_location != targeted_area and targeted_area.lower() != 'nonvis':
             isi_locs.append(targeted_area + layer)
-        elif 'ssp' in unlayered_location.lower() and probe_letter == 'E':
+        elif 'ssp' in unlayered_location.lower() and probe_letter == 'E' and targeted_area.lower() != 'nonvis':
             isi_locs.append(targeted_area + layer)
         else:
             isi_locs.append(ccf_location)
