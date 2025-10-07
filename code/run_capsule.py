@@ -22,6 +22,8 @@ import pandas as pd
 import ibllib.atlas as atlas
 import SimpleITK as sitk
 
+import qc_utils
+
 data_folder = Path("/data/")
 scratch_folder = Path("/scratch/")
 results_folder = Path("/results/")
@@ -210,7 +212,7 @@ def correct_isi_locations(ccf_map, area_classifications):
     return ccf_map
 
 
-def get_isi_column(nwb, area_classifications):
+def get_isi_corrected_column(nwb, area_classifications):
     """
     """
     print(area_classifications)
@@ -411,11 +413,17 @@ def run():
             nwb.electrodes.add_column("y", "ccf y coordinate", data=ys)
             nwb.electrodes.add_column("z", "ccf z coordinate", data=zs)
 
+        qc_folder = results_folder / 'qc'
+        qc_folder.mkdir(parents=True, exist_ok=True)
         if isi_correction:
             area_classifications = pd.read_csv(next(behavior_dir.rglob('*areaClassifications.csv')))
-            isi_column = get_isi_column(nwb, area_classifications)
-            nwb.electrodes.add_column("isi_region", "ISI mapped targeted location", data=isi_column)
+            isi_column = get_isi_corrected_column(nwb, area_classifications)
+            assert len(isi_column) == len(nwb.electrodes)
+            qc_utils.output_electrodes(qc_folder,nwb.electrodes,isi_column)
+            qc_utils.plot_corrected_location_pairs(nwb.electrodes,isi_column,qc_folder)
+            nwb.electrodes.location.data[:] = isi_column
 
+        qc_utils.plot_unit_locations(qc_folder, nwb.units)
         print("at end, electrodes table has len",len(nwb.electrodes))
         print('Exporting to NWB:',result_nwb_path)
         with io_class(str(result_nwb_path), "w") as export_io:
