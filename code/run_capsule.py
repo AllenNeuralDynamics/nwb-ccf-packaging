@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import shutil
+import stat
 from pathlib import Path
 import re
 import ibllib.atlas as atlas
@@ -96,15 +97,14 @@ def extract_session_name_from_nwb(nwb_path):
     return None
 
 
-# converts channel name of the form 'LFP1' or 'AP1' to idx of the form 0
-def channel_name_to_idx(channel_name):
+# converts channel name of the form 'LFP1' or 'AP1' to a channel index
+def channel_name_to_idx(channel_name, one_indexing=True):
     """
     Convert a channel name to a corresponding channel index.
 
     This function processes a channel name by removing specific substrings ('LFP' and 'AP')
-    and then attempts to convert the resulting string into an integer. The function returns
-    the integer index of the channel, adjusting by subtracting 1. If the conversion fails,
-    an exception is raised indicating an unexpected channel name format.
+    and then attempts to convert the resulting string into an integer. Legacy channel
+    numbering is one-based, while newer CCF files are zero-based.
 
     Parameters
     ----------
@@ -115,12 +115,14 @@ def channel_name_to_idx(channel_name):
     Returns
     -------
     int
-        The channel index, derived from the numerical part of the channel name, with
-        1 subtracted from it.
+        The channel index, derived from the numerical part of the channel name.
     """
     stripped_name = channel_name.replace("LFP", "").replace("AP", "")
     try:
-        return int(stripped_name) - 1
+        channel_idx = int(stripped_name)
+        if one_indexing:
+            channel_idx -= 1
+        return channel_idx
     except:
         raise Exception("Unexpected channel name format")
 
@@ -248,7 +250,7 @@ def get_isi_corrected_column(nwb, area_classifications):
     return np.array(isi_locs)
 
 
-def get_new_electrode_colums(nwb, ccf_map):
+def get_new_electrode_colums(nwb, ccf_map, one_indexing=True):
     """
     Extract the anatomical location (brain region) and coordinates (x, y, z)
     for each electrode from the provided NWB file and CCF map.
@@ -284,7 +286,7 @@ def get_new_electrode_colums(nwb, ccf_map):
         probe_name = row["group_name"].item()
         probe_name = probe_name.replace(" ", "")
         probe_name = probe_name[0].lower() + probe_name[1:]
-        channel_id = channel_name_to_idx(row["channel_name"].item())
+        channel_id = channel_name_to_idx(row["channel_name"].item(), one_indexing=one_indexing)
         try:
             structure, x, y, z = ccf_map[probe_name, channel_id]
         except KeyError:
@@ -309,7 +311,20 @@ def zarr_to_hdf5(zarr_path, output_dir):
     print(f'hdf5 file made: {hdf5_path}')
 
 
+def make_tree_user_writable(path: Path):
+    for root, dirs, files in os.walk(path):
+        root_path = Path(root)
+        os.chmod(root_path, os.stat(root_path).st_mode | stat.S_IWUSR | stat.S_IXUSR)
+        for name in dirs:
+            dir_path = root_path / name
+            os.chmod(dir_path, os.stat(dir_path).st_mode | stat.S_IWUSR | stat.S_IXUSR)
+        for name in files:
+            file_path = root_path / name
+            os.chmod(file_path, os.stat(file_path).st_mode | stat.S_IWUSR)
+
+
 def empty_folder(path):
+    failures = []
     for file in path.iterdir():
         try:
             if file.is_symlink() or file.is_file():
@@ -318,7 +333,62 @@ def empty_folder(path):
                 shutil.rmtree(file)
 
         except Exception as e:
+            failures.append((str(file), str(e)))
             print(f"Failed to empty {file} from folder:", path, 'error:', e)
+
+    if failures:
+        raise PermissionError(
+            f"Could not fully clear {path}. Existing files may be owned by another user. "
+            f"First failure: {failures[0]}"
+        )
+
+
+def populate_unit_locations(nwb):
+    """
+    Add location information to units based on their electrode assignments.
+    
+    For each unit, retrieves the location(s) of its recorded electrodes
+    and adds a 'location' column to the units table. If a unit is recorded
+    from multiple electrodes, uses the most common location; if all are
+    different, uses the first electrode's location.
+    
+    Parameters
+    ----------
+    nwb : pynwb.file.NWBFile
+        An NWB file with populated electrode locations and units with
+        electrode assignments.
+    """
+    if not hasattr(nwb, 'units') or nwb.units is None or len(nwb.units) == 0:
+        return  # No units to process
+    
+    if 'electrodes' not in nwb.units.columns:
+        return  # No electrode assignments
+    
+    if 'location' not in nwb.electrodes.columns:
+        return  # Electrodes have no location info
+    
+    unit_locations = []
+    electrode_table = nwb.electrodes
+    
+    for unit_row in nwb.units:
+        # Get the electrodes for this unit
+        electrode_indices = unit_row['electrodes'].data
+        
+        # Get locations for those electrodes
+        locations = [electrode_table.loc[idx, 'location'].item() for idx in electrode_indices]
+        
+        # Use most common location, or first if all different
+        from collections import Counter
+        location_counts = Counter(locations)
+        unit_location = location_counts.most_common(1)[0][0] if locations else 'unknown'
+        
+        unit_locations.append(unit_location)
+    
+    # Add location column to units if not already present
+    if 'location' not in nwb.units.columns:
+        nwb.units.add_column('location', 'brain region location', data=unit_locations)
+    else:
+        nwb.units['location'].data[:] = unit_locations
 
 
 def run():
@@ -354,11 +424,18 @@ def run():
     print(f'Emptying results dir {results_folder}')
     empty_folder(results_folder)
 
-    # determine if file is zarr or hdf5, and copy it to results
-    scratch_nwb_path = scratch_folder / input_nwb_path.name
+    # use /scratch for intermediate edits
     result_nwb_path = results_folder / input_nwb_path.name
-    copied_nwb_path = scratch_nwb_path
+    copied_nwb_path = scratch_folder / input_nwb_path.name
     print(f"copying working files from {input_nwb_path} to {copied_nwb_path}")
+
+    # Avoid merge-copy into a stale tree with old ownership/permissions.
+    if copied_nwb_path.exists():
+        if copied_nwb_path.is_dir():
+            shutil.rmtree(copied_nwb_path)
+        else:
+            copied_nwb_path.unlink()
+
     if input_nwb_path.is_dir():
         # NWB_BACKEND = "hdf5"
         # io_class = NWBHDF5IO
@@ -367,22 +444,37 @@ def run():
         NWB_BACKEND = "zarr"
         io_class = NWBZarrIO
         shutil.copytree(input_nwb_path, copied_nwb_path, dirs_exist_ok=True)
+        make_tree_user_writable(copied_nwb_path)
     else:
         NWB_BACKEND = "hdf5"
         io_class = NWBHDF5IO
         shutil.copyfile(input_nwb_path, copied_nwb_path)
+        os.chmod(copied_nwb_path, os.stat(copied_nwb_path).st_mode | stat.S_IWUSR)
 
     print(f"NWB backend: {NWB_BACKEND}")
     if skip_ccf:
         print('Skipping addition of CCF IBL data')
     else:
         session_id = extract_session_name_from_nwb(input_nwb_path)
-        print(f'Looking for CCF for session_id {session_id}')
-        ccf_json_files = tuple(input_ccf_dir.rglob(f"**/{session_id}/**/Probe*/*locations*.json"))
+        print(f"Looking for CCF for session_id {session_id}")
+
+        # The convert flag distinguishes legacy IBL bregma-space files from newer
+        # CCF-space files and also determines whether channel numbering is one-based.
+        json_filename = "channel_locations.json" if convert_ibl_bregma_to_ccf else "ccf_channel_locations.json"
+        one_indexing = convert_ibl_bregma_to_ccf
+        probe_dirs = tuple(input_ccf_dir.rglob(f"**/{session_id}/**/Probe*"))
+        ccf_json_files = []
+        for probe_dir in probe_dirs:
+            json_file = probe_dir / json_filename
+            if json_file.is_file():
+                ccf_json_files.append(json_file)
+
+        ccf_json_files = tuple(ccf_json_files)
+
         if not ccf_json_files:
             raise FileNotFoundError("No IBL jsons attached")
-        print(f"Found {len(ccf_json_files)} ccf jsons")
 
+        print(f"Found {len(ccf_json_files)} ccf jsons")
         brain_atlas = None
         ccf_volume = sitk.ReadImage(data_folder / 'allen_mouse_ccf/annotation/ccf_2017/annotation_25.nii.gz')
         print("Starting to add to NWB. Coordinates will be in microns")
@@ -400,7 +492,7 @@ def run():
 
         if not skip_ccf:
             print("Getting new electrode columns")
-            locs, xs, ys, zs = get_new_electrode_colums(nwb, ccf_map)
+            locs, xs, ys, zs = get_new_electrode_colums(nwb, ccf_map, one_indexing=one_indexing)
             if len(locs) < len(nwb.electrodes):
                 for i in range(len(nwb.electrodes) - len(locs)):
                     locs.append("unknown")
@@ -423,6 +515,7 @@ def run():
             qc_utils.plot_corrected_location_pairs(nwb.electrodes,isi_column,qc_folder)
             nwb.electrodes.location.data[:] = isi_column
 
+        populate_unit_locations(nwb)
         qc_utils.plot_unit_locations(qc_folder, nwb.units)
         print("at end, electrodes table has len",len(nwb.electrodes))
         print('Exporting to NWB:',result_nwb_path)
