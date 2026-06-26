@@ -33,26 +33,6 @@ results_folder = Path("/results/")
 
 RESOLUTION_UM = 25
 
-def _verify_point(point: int, bound: int) -> None:
-    """
-    Verify that a point index is within the valid bounds.
-
-    Parameters
-    ----------
-    point : int
-        The point index to verify (e.g., voxel index along one axis).
-
-    bound : int
-        The exclusive upper bound (e.g., size of the axis). The valid range is [0, bound).
-
-    Raises
-    ------
-    ValueError
-        If the point is negative or greater than or equal to the bound.
-    """
-    if point < 0 or point >= bound:
-        raise ValueError(f"Value {point} does not fall within range of 0 to {bound}")
-
 def convert_ibl_bregma_to_ccf_microns(brain_atlas: atlas.AllenAtlas, ccf_volume: sitk.Image, ccf_array: np.ndarray, point: tuple[int, int, int]) -> tuple[int, int, int]:
     """
     Convert a coordinate from IBL Bregma space to Common Coordinate Framework (CCF) space.
@@ -83,11 +63,6 @@ def convert_ibl_bregma_to_ccf_microns(brain_atlas: atlas.AllenAtlas, ccf_volume:
     ccf_point_indices = np.array(ccf_volume.TransformPhysicalPointToIndex(ccf_point / 1e3)) # returns point in order AP-DV-ML
     ccf_point_indices[2] = -ccf_point_indices[2]
     ccf_point_indices[1] = -ccf_point_indices[1]
-
-    # check points are within bounds 
-    _verify_point(ccf_point_indices[0], ccf_array.shape[2]) # AP
-    _verify_point(ccf_point_indices[1], ccf_array.shape[1]) # DV
-    _verify_point(ccf_point_indices[2], ccf_array.shape[0]) # ML
 
     return ccf_point_indices * RESOLUTION_UM
 
@@ -183,11 +158,6 @@ def build_ccf_map(ccf_json_files, ccf_volume: sitk.Image, brain_atlas: Union[atl
                 ccf_point_microns = convert_ibl_bregma_to_ccf_microns(brain_atlas, ccf_volume, ccf_array, (x, y, z))
             else:
                 ccf_point_indices = np.array(ccf_volume.TransformPhysicalPointToIndex(np.array((x, y, z))))
-                # check points are within bounds 
-                print(channel,"#",x,y,z,ccf_point_indices)
-                # _verify_point(ccf_point_indices[0], ccf_array.shape[2]) # AP
-                # _verify_point(ccf_point_indices[1], ccf_array.shape[1]) # DV
-                # _verify_point(ccf_point_indices[2], ccf_array.shape[0]) # ML
                 ccf_point_microns = ccf_point_indices * RESOLUTION_UM
             
             x,y,z = float(ccf_point_microns[0]), float(ccf_point_microns[1]), float(ccf_point_microns[2])
