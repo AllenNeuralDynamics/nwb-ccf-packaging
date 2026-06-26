@@ -23,7 +23,7 @@ results_folder = Path("/results/")
 def get_unit_locations(units_table):
     unit_locations = []
     for unit_idx in range(len(units_table)):
-        if unit_idx % 100 = 0:
+        if unit_idx % 100 == 0:
             print(f"getting unit location {unit_idx}/{len(units_table)}")
         mean_waveforms = units_table['waveform_mean'][unit_idx]
         waveform_maxes = np.min(mean_waveforms, axis=1)
