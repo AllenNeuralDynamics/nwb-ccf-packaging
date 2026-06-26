@@ -29,7 +29,6 @@ def get_unit_locations(units_table):
         peak_channel_idx = np.argmax(waveform_maxes)
 
         detected_electrodes = units_table['electrodes'][unit_idx]
-        print(detected_electrodes)
         unit_location = detected_electrodes.iloc[peak_channel_idx].location
         unit_locations.append(unit_location)        
 

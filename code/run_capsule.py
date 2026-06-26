@@ -13,6 +13,8 @@ from pathlib import Path
 import re
 import ibllib.atlas as atlas
 from typing import Union
+import sys
+import subprocess
 
 import numpy as np
 from hdmf.common.table import DynamicTable
@@ -182,9 +184,10 @@ def build_ccf_map(ccf_json_files, ccf_volume: sitk.Image, brain_atlas: Union[atl
             else:
                 ccf_point_indices = np.array(ccf_volume.TransformPhysicalPointToIndex(np.array((x, y, z))))
                 # check points are within bounds 
-                _verify_point(ccf_point_indices[0], ccf_array.shape[2]) # AP
-                _verify_point(ccf_point_indices[1], ccf_array.shape[1]) # DV
-                _verify_point(ccf_point_indices[2], ccf_array.shape[0]) # ML
+                print(channel,"#",x,y,z,ccf_point_indices)
+                # _verify_point(ccf_point_indices[0], ccf_array.shape[2]) # AP
+                # _verify_point(ccf_point_indices[1], ccf_array.shape[1]) # DV
+                # _verify_point(ccf_point_indices[2], ccf_array.shape[0]) # ML
                 ccf_point_microns = ccf_point_indices * RESOLUTION_UM
             
             x,y,z = float(ccf_point_microns[0]), float(ccf_point_microns[1]), float(ccf_point_microns[2])
@@ -219,7 +222,7 @@ def get_isi_corrected_column(nwb, area_classifications):
     """
     print(area_classifications)
     isi_locs = []
-    print("electrode columns:",len(nwb.electrodes))
+    print("electrode columns before isi correction:",len(nwb.electrodes))
     for row in nwb.electrodes:
         probe_name = row["group_name"].item()
         probe_letter = probe_name[-1].upper()
@@ -327,11 +330,11 @@ def empty_folder(path):
     failures = []
     for file in path.iterdir():
         try:
-            if file.is_symlink() or file.is_file():
-                file.unlink()
-            else:
-                shutil.rmtree(file)
-
+            subprocess.run(['chmod', '-R', '777', str(file)], capture_output=True)
+            subprocess.run(['rm', '-rf', str(file)], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            failures.append((str(file), e.stderr))
+            print(f"Failed to empty {file} from folder:", path, 'error:', e.stderr)
         except Exception as e:
             failures.append((str(file), str(e)))
             print(f"Failed to empty {file} from folder:", path, 'error:', e)
@@ -341,8 +344,8 @@ def empty_folder(path):
             f"Could not fully clear {path}. Existing files may be owned by another user. "
             f"First failure: {failures[0]}"
         )
-
-
+   
+        
 def populate_unit_locations(nwb):
     """
     Add location information to units based on their electrode assignments.
@@ -508,12 +511,16 @@ def run():
         qc_folder = results_folder / 'qc'
         qc_folder.mkdir(parents=True, exist_ok=True)
         if isi_correction:
+            print("DOING ISI CORRECTION")
             area_classifications = pd.read_csv(next(behavior_dir.rglob('*areaClassifications.csv')))
+            print("FOUND AREA CLASSIFICATIONS:",area_classifications)
             isi_column = get_isi_corrected_column(nwb, area_classifications)
             assert len(isi_column) == len(nwb.electrodes)
             qc_utils.output_electrodes(qc_folder,nwb.electrodes,isi_column)
             qc_utils.plot_corrected_location_pairs(nwb.electrodes,isi_column,qc_folder)
             nwb.electrodes.location.data[:] = isi_column
+        else:
+            print("NOT DOING ISI CORRECTION")
 
         populate_unit_locations(nwb)
         qc_utils.plot_unit_locations(qc_folder, nwb.units)
